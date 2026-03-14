@@ -1,0 +1,155 @@
+.review-intelligence {
+  animation: fadeIn 0.3s ease;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.sentiment-summary {
+  display: flex;
+  justify-content: space-around;
+  padding-top: 20px;
+  border-top: 1px solid #e2e8f0;
+  margin-top: 20px;
+}
+
+.summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary-label {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.summary-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1a202c;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.insights-list {
+  display: grid;
+  gap: 16px;
+}
+
+.insight-item {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+}
+
+.insight-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.insight-item-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #6366f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.impact-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 12px;
+}
+
+.impact-badge.high {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.impact-badge.medium {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.insight-item-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a202c;
+  margin-bottom: 8px;
+}
+
+.insight-item-description {
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.aspect-details {
+  margin-top: 32px;
+}
+
+.aspect-table {
+  background: white;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+}
+
+.table-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  padding: 16px 20px;
+  background: #f8f9fc;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.table-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  padding: 16px 20px;
+  border-top: 1px solid #e2e8f0;
+  align-items: center;
+}
+
+.aspect-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1a202c;
+}
+
+.aspect-score {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a202c;
+}
+
+.aspect-reviews {
+  font-size: 14px;
+  color: #64748b;
+}
+
+.aspect-trend {
+  display: flex;
+  align-items: center;
+}
