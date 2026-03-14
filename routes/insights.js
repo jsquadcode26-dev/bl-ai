@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { verifyToken } from '../utils/auth.js';
 import { getInsights, createInsight, submitInsightFeedback, getSellerProducts } from '../utils/db.js';
 import { generateInsightsFromGroq } from '../utils/groqClient.js';
@@ -58,10 +58,11 @@ router.get('/', verifyToken, async (req, res) => {
 // Get single insight
 router.get('/:insightId', verifyToken, async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('insights')
       .select('*')
       .eq('id', req.params.insightId)
+      .eq('seller_id', req.user.userId)
       .single();
 
     if (error) throw error;
@@ -149,8 +150,8 @@ router.post('/generate/batch', verifyToken, async (req, res) => {
     const selectedProducts = allProducts.filter(p => productIds.includes(p.id))
       .map(p => ({
         name: p.title,
-        price: p.price,
-        inventory: p.inventory_count,
+        price: p.current_price,
+        inventory: p.stock_qty,
         category: p.category
       }));
 
@@ -163,11 +164,15 @@ router.post('/generate/batch', verifyToken, async (req, res) => {
     for (const insight of aiInsights) {
       const insightData = {
         seller_id: req.user.userId,
+        product_id: allProducts.find(p => p.title === selectedProducts.find(sp => sp.name)?.name)?.id || null,
+        type: insight.type || 'pricing',
         title: insight.title || 'New AI Insight',
-        type: insight.type || 'general',
-        description: insight.description || '',
+        explanation: insight.description || 'Generated market insight from AI analysis.',
+        action: 'Review and apply this recommendation in your pricing/logistics strategy.',
         urgency_score: insight.urgency_level === 'high' ? 90 : insight.urgency_level === 'medium' ? 60 : 30,
-        status: 'new'
+        confidence: insight.urgency_level === 'high' ? 0.9 : 0.75,
+        supporting_data: { source: 'groq', generated_at: new Date().toISOString() },
+        created_at: new Date().toISOString()
       };
 
       const saved = await createInsight(insightData);

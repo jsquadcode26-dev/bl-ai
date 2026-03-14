@@ -12,11 +12,30 @@ const PriceTracker = () => {
   const [priceData, setPriceData] = useState([]);
   const [volatility, setVolatility] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
+  const [sheetPricingRows, setSheetPricingRows] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchData();
   }, []);
+
+  const formatINR = (value) => {
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) return '—';
+    return `₹${numeric.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  };
+
+  const parseInsights = (insights) => {
+    if (!insights) return null;
+    if (typeof insights === 'string') {
+      try {
+        return JSON.parse(insights);
+      } catch {
+        return null;
+      }
+    }
+    return insights;
+  };
 
   useEffect(() => {
     if (selectedProduct && products.length > 0) {
@@ -27,11 +46,25 @@ const PriceTracker = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const productsRes = await api.getProducts();
+      const [productsRes, sheetAnalysisRes] = await Promise.all([
+        api.getProducts(),
+        api.getSheetAnalysis().catch(() => ({ analyses: [] }))
+      ]);
+
       setProducts(productsRes.data || []);
       if (productsRes.data?.length > 0) {
         setSelectedProduct(productsRes.data[0].id);
       }
+
+      const latestPricingAnalysis = (sheetAnalysisRes.analyses || []).find(
+        (analysis) => {
+          if (analysis.analysis_type !== 'pricing_analysis') return false;
+          const insights = parseInsights(analysis.insights);
+          return insights?.productComparisons?.length > 0;
+        }
+      );
+      const parsedInsights = latestPricingAnalysis ? parseInsights(latestPricingAnalysis.insights) : null;
+      setSheetPricingRows(parsedInsights?.productComparisons || []);
     } catch (error) {
       console.error('Error fetching products:', error);
     } finally {
@@ -56,8 +89,8 @@ const PriceTracker = () => {
   if (loading) {
     return (
       <div className="price-tracker">
-        <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-          <Loader className="animate-spin" size={40} style={{ margin: '0 auto 20px' }} />
+        <div className="state-card">
+          <Loader className="animate-spin" size={40} />
           <p>Loading price data...</p>
         </div>
       </div>
@@ -68,14 +101,48 @@ const PriceTracker = () => {
     <div className="price-tracker">
       <div className="page-header">
         <h1>Price Tracker</h1>
-        <p>Monitor and compare pricing across competitors</p>
+        <p>Monitor prices</p>
       </div>
 
-      {products.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-          <p>No products tracked yet. Add a product to get started.</p>
+      <div className="state-hint">Showing sheet-based pricing analysis</div>
+
+      {sheetPricingRows.length > 0 ? (
+        <div className="sheet-pricing-table-card">
+          <h3 className="chart-title">Sheet Price Comparison & Recommended Sell Price</h3>
+          <div className="sheet-pricing-table-wrap">
+            <table className="sheet-pricing-table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Current Price</th>
+                  <th>Market Price</th>
+                  <th>Recommended</th>
+                  <th>Expected Margin %</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sheetPricingRows.map((item, index) => (
+                  <tr key={`${item.product}-${index}`}>
+                    <td>{item.product}</td>
+                    <td>{formatINR(item.currentPrice)}</td>
+                    <td>{formatINR(item.marketPrice)}</td>
+                    <td className="recommended-price">{formatINR(item.recommendedPrice)}</td>
+                    <td>{item.expectedMarginPct}%</td>
+                    <td>{item.action}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
+        <div className="state-card compact">
+          <p>No sheet-based pricing analysis yet. Run analysis in Settings, then refresh this page.</p>
+        </div>
+      )}
+
+      {products.length > 0 && (
         <>
           <div className="controls">
             <div className="control-group">
@@ -106,7 +173,7 @@ const PriceTracker = () => {
           </div>
 
           {recommendations.length > 0 && (
-            <div className="recommendations-container" style={{ marginBottom: '32px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '20px' }}>
+            <div className="recommendations-container">
               {recommendations.map((rec) => (
                 <InsightCard
                   key={`price-rec-${rec.id}`}

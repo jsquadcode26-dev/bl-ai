@@ -22,7 +22,7 @@ export const createUser = async (userData) => {
 
 // Product functions
 export const getSellerProducts = async (sellerId) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('products')
     .select('*')
     .eq('seller_id', sellerId)
@@ -32,7 +32,7 @@ export const getSellerProducts = async (sellerId) => {
 };
 
 export const createProduct = async (productData) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('products')
     .insert([productData])
     .select();
@@ -41,7 +41,7 @@ export const createProduct = async (productData) => {
 };
 
 export const updateProduct = async (productId, updates) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('products')
     .update(updates)
     .eq('id', productId)
@@ -52,7 +52,7 @@ export const updateProduct = async (productId, updates) => {
 
 // Insights functions
 export const getInsights = async (sellerId, filters = {}) => {
-  let query = supabase
+  let query = supabaseAdmin
     .from('insights')
     .select('*')
     .eq('seller_id', sellerId);
@@ -67,7 +67,7 @@ export const getInsights = async (sellerId, filters = {}) => {
 };
 
 export const createInsight = async (insightData) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('insights')
     .insert([insightData])
     .select();
@@ -152,7 +152,7 @@ export const insertReview = async (reviewData) => {
 
 // Logistics functions
 export const getLogisticsData = async (sellerId) => {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('logistics_logs')
     .select('*')
     .eq('seller_id', sellerId)

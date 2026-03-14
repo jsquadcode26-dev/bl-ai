@@ -45,8 +45,8 @@ const Notifications = () => {
         title: alert.title,
         message: alert.message,
         time: formatTime(alert.created_at),
-        read: alert.is_read || false,
-        priority: alert.severity || 'medium'
+        read: Boolean(alert.read ?? alert.is_read ?? false),
+        priority: alert.urgency || alert.severity || 'medium'
       }));
       setNotifications(formattedNotifications);
     } catch (error) {
@@ -71,16 +71,18 @@ const Notifications = () => {
     if (!date) return 'recently';
     const now = new Date();
     const alertDate = new Date(date);
+    if (Number.isNaN(alertDate.getTime())) return 'recently';
     const diffMs = now - alertDate;
-    const diffMins = Math.floor(diffMs / 60000);
+    const safeDiffMs = Math.max(0, diffMs);
+    const diffMins = Math.floor(safeDiffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
     if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays === 1) return '1 day ago';
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return alertDate.toLocaleDateString();
+    if (diffHours < 24) return `${Math.floor(safeDiffMs / 3600000)}h ago`;
+    if (Math.floor(safeDiffMs / 86400000) === 1) return '1 day ago';
+    if (Math.floor(safeDiffMs / 86400000) < 7) return `${Math.floor(safeDiffMs / 86400000)}d ago`;
+    return alertDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
   if (loading) {

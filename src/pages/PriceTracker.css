@@ -2,6 +2,40 @@
   animation: fadeIn 0.3s ease;
 }
 
+.state-card {
+  text-align: center;
+  padding: 36px;
+  color: #6b7280;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+.state-card.compact {
+  padding: 24px;
+}
+
+.state-hint {
+  margin-bottom: 14px;
+  color: #475569;
+  font-size: 13px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  padding: 8px 12px;
+  width: fit-content;
+}
+
+.recommendations-container {
+  margin-bottom: 32px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+}
+
 .controls {
   display: flex;
   gap: 24px;
@@ -122,4 +156,54 @@
 .volatility-label {
   font-size: 13px;
   color: #64748b;
+}
+
+.sheet-pricing-table-card {
+  margin-bottom: 24px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.sheet-pricing-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.sheet-pricing-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+}
+
+.sheet-pricing-table th,
+.sheet-pricing-table td {
+  padding: 12px;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 14px;
+  text-align: left;
+  color: #1f2937;
+}
+
+.sheet-pricing-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 600;
+}
+
+.sheet-pricing-table td:nth-child(2),
+.sheet-pricing-table td:nth-child(3),
+.sheet-pricing-table td:nth-child(4),
+.sheet-pricing-table td:nth-child(5),
+.sheet-pricing-table th:nth-child(2),
+.sheet-pricing-table th:nth-child(3),
+.sheet-pricing-table th:nth-child(4),
+.sheet-pricing-table th:nth-child(5) {
+  text-align: right;
+}
+
+.sheet-pricing-table .recommended-price {
+  color: #1d4ed8;
+  font-weight: 700;
 }

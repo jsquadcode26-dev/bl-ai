@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Loader } from 'lucide-react';
 import InsightCard from '../components/InsightCard';
 import api from '../utils/api';
+import realtime from '../utils/realtime';
 import './InsightsFeed.css';
 
 const InsightsFeed = () => {
@@ -9,28 +10,81 @@ const InsightsFeed = () => {
   const [insights, setInsights] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const parseMaybeJson = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  const normalizeScore = (value, fallback = 50) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return numeric <= 1 ? Math.round(numeric * 100) : Math.round(numeric);
+  };
+
+  const normalizeInsight = (insight) => ({
+    ...insight,
+    type: insight.type || insight.analysis_type || 'general',
+    category: insight.category || insight.type || insight.analysis_type || 'general',
+    explanation: insight.explanation || insight.description || '',
+    action:
+      insight.action ||
+      (Array.isArray(parseMaybeJson(insight.recommendations))
+        ? parseMaybeJson(insight.recommendations)[0]
+        : Array.isArray(insight.recommendations)
+          ? insight.recommendations[0]
+          : 'Review this insight'),
+    urgency: normalizeScore(insight.urgency ?? insight.urgency_score ?? insight.confidence_score, 50),
+    confidence: normalizeScore(insight.confidence ?? insight.confidence_score, 50)
+  });
+
   useEffect(() => {
     fetchInsights();
 
-    // Listen for real-time insight updates
-    if (window.socket) {
-      window.socket.on('new_insight', (newInsight) => {
-        setInsights(prev => [newInsight, ...prev]);
-      });
-    }
+    const onNewInsight = (newInsight) => {
+      setInsights(prev => [normalizeInsight(newInsight), ...prev]);
+    };
+
+    realtime.on('new-insight', onNewInsight);
 
     return () => {
-      if (window.socket) {
-        window.socket.off('new_insight');
-      }
+      realtime.off('new-insight', onNewInsight);
     };
   }, []);
 
   const fetchInsights = async () => {
     try {
       setLoading(true);
-      const res = await api.getInsights();
-      setInsights(res.data || []);
+      const [res, sheetRes] = await Promise.all([
+        api.getInsights(),
+        api.getSheetAnalysis().catch(() => ({ analyses: [] }))
+      ]);
+      
+      // Transform sheet analysis results to match InsightCard format
+      const transformedSheetAnalyses = (sheetRes.analyses || []).map(analysis => ({
+        id: analysis.id,
+        title: analysis.title,
+        explanation: analysis.description,
+        action: Array.isArray(parseMaybeJson(analysis.recommendations))
+          ? parseMaybeJson(analysis.recommendations)[0]
+          : 'Review analysis',
+        urgency: normalizeScore(analysis.confidence_score || 0.5),
+        confidence: normalizeScore(analysis.confidence_score || 0.5),
+        type: analysis.analysis_type,
+        metrics: analysis.metrics,
+        category: analysis.analysis_type?.replace(/_/g, ' ')
+      }));
+      
+      // Merge sheet analysis with regular insights
+      const allInsights = [...(res.data || []), ...transformedSheetAnalyses].map(normalizeInsight);
+      setInsights(allInsights);
     } catch (error) {
       console.error('Error fetching insights:', error);
       setInsights([]);
@@ -52,7 +106,7 @@ const InsightsFeed = () => {
 
   const filteredInsights = filter === 'all' 
     ? insights 
-    : insights.filter(insight => insight.category === filter);
+    : insights.filter(insight => insight.category === filter || insight.type === filter);
 
   return (
     <div className="insights-feed">

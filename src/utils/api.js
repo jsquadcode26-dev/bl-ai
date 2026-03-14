@@ -140,6 +140,10 @@ class APIClient {
     return this.client.get('/competitors/radar/summary');
   }
 
+  estimateCompetitorPrices(productName, ourPrice) {
+    return this.client.post('/competitors/estimate-prices', { productName, ourPrice });
+  }
+
   // Review endpoints
   getReviews(productId, limit = 50) {
     return this.client.get(`/reviews/${productId}?limit=${limit}`);
@@ -178,6 +182,15 @@ class APIClient {
 
   getRouteAnalytics(route, days = 30) {
     return this.client.get(`/logistics/${route}/analytics?days=${days}`);
+  }
+
+  optimizeTransportRoute(fromPlace, toPlace, targetDurationHours, avoidTollGates = false) {
+    return this.client.post('/logistics/transport/optimize', {
+      fromPlace,
+      toPlace,
+      targetDurationHours,
+      avoidTollGates
+    });
   }
 
   // Notification endpoints

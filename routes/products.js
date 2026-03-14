@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { verifyToken } from '../utils/auth.js';
 import { getSellerProducts, createProduct, updateProduct } from '../utils/db.js';
 
@@ -18,10 +18,11 @@ router.get('/', verifyToken, async (req, res) => {
 // Get single product
 router.get('/:productId', verifyToken, async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('products')
       .select('*')
       .eq('id', req.params.productId)
+      .eq('seller_id', req.user.userId)
       .single();
 
     if (error) throw error;
@@ -97,10 +98,11 @@ router.put('/:productId', verifyToken, async (req, res) => {
 // Delete product
 router.delete('/:productId', verifyToken, async (req, res) => {
   try {
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('products')
       .delete()
-      .eq('id', req.params.productId);
+      .eq('id', req.params.productId)
+      .eq('seller_id', req.user.userId);
 
     if (error) throw error;
 

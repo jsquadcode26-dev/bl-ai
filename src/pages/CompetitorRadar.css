@@ -2,6 +2,51 @@
   animation: fadeIn 0.3s ease;
 }
 
+.state-card {
+  text-align: center;
+  padding: 36px;
+  color: #6b7280;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+.state-card.compact {
+  padding: 24px;
+}
+
+.simple-table table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 840px;
+}
+
+.simple-table thead th {
+  background: #f8f9fc;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+}
+
+.simple-table tbody td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 14px;
+  color: #1f2937;
+}
+
+.simple-table tbody tr:hover {
+  background: #f8f9fc;
+}
+
 .competitor-table-card {
   background: white;
   border-radius: 12px;
@@ -12,199 +57,4 @@
 
 .competitor-table {
   overflow-x: auto;
-}
-
-.competitor-table .table-header {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1.2fr 0.8fr 1.2fr 1.5fr 1fr;
-  padding: 16px 20px;
-  background: #f8f9fc;
-  font-size: 13px;
-  font-weight: 600;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.competitor-table .table-row {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1.2fr 0.8fr 1.2fr 1.5fr 1fr;
-  padding: 16px 20px;
-  border-top: 1px solid #e2e8f0;
-  align-items: center;
-  transition: background 0.2s;
-}
-
-.competitor-table .table-row:hover {
-  background: #f8f9fc;
-}
-
-.competitor-name {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #1a202c;
-}
-
-.competitor-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: #eef2ff;
-  color: #6366f1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.price-cell {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1a202c;
-}
-
-.change-cell {
-  font-size: 14px;
-}
-
-.change-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.change-badge.positive {
-  background: #d1fae5;
-  color: #10b981;
-}
-
-.change-badge.negative {
-  background: #fee2e2;
-  color: #ef4444;
-}
-
-.change-badge.neutral {
-  background: #f1f5f9;
-  color: #64748b;
-}
-
-.rating-cell {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a202c;
-}
-
-.event-cell {
-  font-size: 13px;
-}
-
-.event-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.time-cell {
-  font-size: 13px;
-  color: #64748b;
-}
-
-.alerts-section {
-  margin-top: 32px;
-}
-
-.alerts-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 20px;
-}
-
-.alert-card {
-  background: white;
-  border-radius: 12px;
-  padding: 20px;
-  border-left: 4px solid;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-}
-
-.alert-card.urgent {
-  border-left-color: #ef4444;
-}
-
-.alert-card.warning {
-  border-left-color: #f59e0b;
-}
-
-.alert-card.info {
-  border-left-color: #6366f1;
-}
-
-.alert-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.alert-card.urgent .alert-header svg {
-  color: #ef4444;
-}
-
-.alert-card.warning .alert-header svg {
-  color: #f59e0b;
-}
-
-.alert-card.info .alert-header svg {
-  color: #6366f1;
-}
-
-.alert-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 12px;
-}
-
-.alert-card.urgent .alert-badge {
-  background: #fee2e2;
-  color: #ef4444;
-}
-
-.alert-card.warning .alert-badge {
-  background: #fef3c7;
-  color: #f59e0b;
-}
-
-.alert-card.info .alert-badge {
-  background: #dbeafe;
-  color: #6366f1;
-}
-
-.alert-card h4 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1a202c;
-  margin-bottom: 8px;
-}
-
-.alert-card p {
-  font-size: 14px;
-  color: #64748b;
-  line-height: 1.6;
-  margin-bottom: 12px;
-}
-
-.alert-time {
-  font-size: 12px;
-  color: #94a3b8;
 }

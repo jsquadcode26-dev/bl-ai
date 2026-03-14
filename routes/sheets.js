@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js';
 import GoogleSheetsService from '../utils/googleSheetsService.js';
 import AnalysisEngine from '../utils/analysisEngine.js';
 import { verifyToken } from '../utils/auth.js';
@@ -106,14 +106,14 @@ router.post('/configure', verifyToken, async (req, res) => {
     }
 
     // Check if user already has a connection
-    const { data: existingConnection } = await supabase
+    const { data: existingConnection } = await supabaseAdmin
       .from('google_sheets_connections')
       .select('*')
       .eq('user_id', userId)
       .maybeSingle();
 
     // Check if user exists in the local 'users' table or create a placeholder
-    const { data: userRecord, error: userError } = await supabase
+    const { data: userRecord, error: userError } = await supabaseAdmin
       .from('users')
       .select('id')
       .eq('id', userId)
@@ -121,7 +121,7 @@ router.post('/configure', verifyToken, async (req, res) => {
 
     if (!userRecord) {
       console.log(`[Sheets] User ${userId} not found in users table. Syncing profile...`);
-      await supabase.from('users').insert([{
+      await supabaseAdmin.from('users').insert([{
         id: userId,
         email: req.user.email || 'user@example.com',
         full_name: 'MarketMind User'
@@ -144,7 +144,7 @@ router.post('/configure', verifyToken, async (req, res) => {
     // We wrap db calls in try-catch to identify schema issues
     try {
       if (existingConnection) {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
           .from('google_sheets_connections')
           .update(connectionData)
           .eq('user_id', userId)
@@ -153,7 +153,7 @@ router.post('/configure', verifyToken, async (req, res) => {
         if (error) throw error;
         savedConnection = data;
       } else {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
           .from('google_sheets_connections')
           .insert([connectionData])
           .select()
@@ -202,7 +202,7 @@ router.get('/status', verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('google_sheets_connections')
       .select('*')
       .eq('user_id', userId)
@@ -230,7 +230,7 @@ router.get('/analysis', verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('sheet_analysis_results')
       .select('*')
       .eq('user_id', userId)
@@ -258,7 +258,7 @@ router.post('/analyze', verifyToken, async (req, res) => {
     const userId = req.user.userId;
 
     // Get user's sheet connection
-    const { data: connection, error } = await supabase
+    const { data: connection, error } = await supabaseAdmin
       .from('google_sheets_connections')
       .select('*')
       .eq('user_id', userId)
@@ -297,7 +297,7 @@ router.delete('/disconnect', verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    await supabase
+    await supabaseAdmin
       .from('google_sheets_connections')
       .delete()
       .eq('user_id', userId);
@@ -347,7 +347,7 @@ async function triggerSheetAnalysis(userId, connectionId, sheetId, accessToken) 
     }
 
     // Update last sync time
-    await supabase
+    await supabaseAdmin
       .from('google_sheets_connections')
       .update({ last_sync: new Date().toISOString() })
       .eq('id', connectionId);

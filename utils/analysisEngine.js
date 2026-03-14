@@ -91,11 +91,15 @@ class AnalysisEngine {
     return rows.map(row => ({
       date: row[columnMap['date']] || new Date().toISOString(),
       product: row[columnMap['product name']],
+      sku: row[columnMap['sku']] || '',
       unitsSold: parseInt(row[columnMap['units sold']]) || 0,
       salePrice: parseFloat(row[columnMap['selling price']]) || parseFloat(row[columnMap['sale price']]) || 0,
       totalRevenue: parseFloat(row[columnMap['total revenue']]) || 0,
       customerCount: parseInt(row[columnMap['customer count']]) || 0,
-    })).filter(d => d.totalRevenue > 0);
+      competitorPrice: parseFloat(row[columnMap['competitor price']]) || 0,
+      purchasePrice: parseFloat(row[columnMap['purchase price']]) || 0,
+      avgRating: parseFloat(row[columnMap['average rating']]) || 0
+    })).filter(d => d.product && d.salePrice > 0);
   }
 
   /**
@@ -260,34 +264,113 @@ class AnalysisEngine {
       };
     }
 
-    const avgPrice = (salesData.reduce((sum, d) => sum + d.salePrice, 0) / salesData.length).toFixed(2);
-    const priceRange = {
-      min: Math.min(...salesData.map(d => d.salePrice)),
-      max: Math.max(...salesData.map(d => d.salePrice))
-    };
+    const byProduct = new Map();
+    for (const row of salesData) {
+      const key = row.product;
+      const existing = byProduct.get(key) || {
+        product: row.product,
+        sku: row.sku || '-',
+        ownPrices: [],
+        competitorPrices: [],
+        purchasePrices: [],
+        unitsSold: [],
+        ratings: []
+      };
+
+      existing.ownPrices.push(row.salePrice);
+      if (row.competitorPrice > 0) existing.competitorPrices.push(row.competitorPrice);
+      if (row.purchasePrice > 0) existing.purchasePrices.push(row.purchasePrice);
+      existing.unitsSold.push(row.unitsSold || 0);
+      if (row.avgRating > 0) existing.ratings.push(row.avgRating);
+      byProduct.set(key, existing);
+    }
+
+    const productComparisons = Array.from(byProduct.values()).map((item) => {
+      const avgOwnPrice = item.ownPrices.reduce((sum, value) => sum + value, 0) / item.ownPrices.length;
+      const avgMarketPrice = item.competitorPrices.length > 0
+        ? item.competitorPrices.reduce((sum, value) => sum + value, 0) / item.competitorPrices.length
+        : avgOwnPrice;
+      const avgPurchasePrice = item.purchasePrices.length > 0
+        ? item.purchasePrices.reduce((sum, value) => sum + value, 0) / item.purchasePrices.length
+        : avgOwnPrice * 0.75;
+
+      const avgUnitsSold = item.unitsSold.reduce((sum, value) => sum + value, 0) / item.unitsSold.length;
+      const avgRating = item.ratings.length > 0
+        ? item.ratings.reduce((sum, value) => sum + value, 0) / item.ratings.length
+        : 4;
+
+      const minProfitPrice = avgPurchasePrice * 1.2;
+      const ratingAdjustment = avgRating >= 4.5 ? 0.03 : avgRating < 3.8 ? -0.04 : 0;
+      const demandAdjustment = avgUnitsSold >= 20 ? 0.03 : avgUnitsSold <= 5 ? -0.02 : 0;
+
+      const demandWeightedMarket = avgMarketPrice * (1 + ratingAdjustment + demandAdjustment);
+      const marketCap = item.competitorPrices.length > 0 ? avgMarketPrice * 1.08 : avgOwnPrice * 1.12;
+      const recommendedPrice = Math.max(minProfitPrice, Math.min(demandWeightedMarket, marketCap));
+
+      const priceGapPct = avgOwnPrice > 0 ? ((avgOwnPrice - avgMarketPrice) / avgOwnPrice) * 100 : 0;
+      const expectedMarginPct = recommendedPrice > 0
+        ? ((recommendedPrice - avgPurchasePrice) / recommendedPrice) * 100
+        : 0;
+
+      let action = 'Keep current pricing';
+      if (recommendedPrice > avgOwnPrice * 1.03) action = 'Increase price';
+      else if (recommendedPrice < avgOwnPrice * 0.97) action = 'Reduce price';
+
+      return {
+        product: item.product,
+        sku: item.sku,
+        currentPrice: Number(avgOwnPrice.toFixed(2)),
+        marketPrice: Number(avgMarketPrice.toFixed(2)),
+        recommendedPrice: Number(recommendedPrice.toFixed(2)),
+        purchasePrice: Number(avgPurchasePrice.toFixed(2)),
+        priceGapPct: Number(priceGapPct.toFixed(2)),
+        expectedMarginPct: Number(expectedMarginPct.toFixed(2)),
+        avgUnitsSold: Number(avgUnitsSold.toFixed(2)),
+        avgRating: Number(avgRating.toFixed(2)),
+        action
+      };
+    });
+
+    const increases = productComparisons.filter((p) => p.action === 'Increase price').length;
+    const reductions = productComparisons.filter((p) => p.action === 'Reduce price').length;
+    const avgUpliftPct = productComparisons.length > 0
+      ? productComparisons.reduce((sum, p) => {
+          if (!p.currentPrice) return sum;
+          return sum + (((p.recommendedPrice - p.currentPrice) / p.currentPrice) * 100);
+        }, 0) / productComparisons.length
+      : 0;
+
+    const highestOpportunity = productComparisons
+      .slice()
+      .sort((a, b) => (b.recommendedPrice - b.currentPrice) - (a.recommendedPrice - a.currentPrice))[0];
 
     return {
       type: 'pricing_analysis',
-      title: 'Pricing Optimization Recommendations',
-      description: 'Data-driven pricing strategy recommendations',
+      title: 'Product-wise Price Comparison & Recommended Sell Price',
+      description: 'Compared sheet prices with market/competitor prices and generated recommended selling price for each product.',
       insights: {
-        avgPrice: this.formatINR(avgPrice),
-        priceRange: `${this.formatINR(priceRange.min)} - ${this.formatINR(priceRange.max)}`,
-        recommendedMarkup: '20-30%',
-        elasticity: 'Moderate'
+        productComparisons,
+        summary: {
+          productsAnalyzed: productComparisons.length,
+          priceIncreaseCandidates: increases,
+          priceReductionCandidates: reductions,
+          avgRecommendedChangePct: Number(avgUpliftPct.toFixed(2))
+        }
       },
       recommendations: [
-        `Current average price: ${this.formatINR(avgPrice)}. Price range: ${this.formatINR(priceRange.min)} - ${this.formatINR(priceRange.max)}`,
-        'Consider psychological pricing (e.g., ₹999 instead of ₹1000)',
-        'Test price increase of 5-10% to find optimal price point',
-        'Monitor competitor prices weekly and adjust accordingly'
+        `Products analyzed: ${productComparisons.length}. Increase candidates: ${increases}, reduction candidates: ${reductions}.`,
+        highestOpportunity
+          ? `Highest upside product: ${highestOpportunity.product}. Current ${this.formatINR(highestOpportunity.currentPrice)} → recommended ${this.formatINR(highestOpportunity.recommendedPrice)}.`
+          : 'Add more product rows to get stronger recommendations.',
+        'Refresh competitor/market prices regularly in your sheet for better recommendation accuracy.'
       ],
       metrics: {
-        avgPrice,
-        minPrice: priceRange.min,
-        maxPrice: priceRange.max
+        productsAnalyzed: productComparisons.length,
+        avgRecommendedChangePct: Number(avgUpliftPct.toFixed(2)),
+        increaseCandidates: increases,
+        reductionCandidates: reductions
       },
-      confidence: 0.82
+      confidence: 0.86
     };
   }
 }

@@ -1,17 +1,109 @@
-import { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, AlertCircle, Package, Loader } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Loader } from 'lucide-react';
 import api from '../utils/api';
-import InsightCard from '../components/InsightCard';
 import './CompetitorRadar.css';
 
 const CompetitorRadar = () => {
   const [sortBy, setSortBy] = useState('priceChange');
   const [filterEvent, setFilterEvent] = useState('all');
   const [competitors, setCompetitors] = useState([]);
-  const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState('');
   const [products, setProducts] = useState([]);
+  const [sheetPricingRows, setSheetPricingRows] = useState([]);
+  const [aiEstimate, setAiEstimate] = useState(null);
+
+  const selectedProductData = useMemo(
+    () => products.find((product) => product.id === selectedProduct) || null,
+    [products, selectedProduct]
+  );
+
+  const filteredCompetitors = useMemo(() => {
+    let data = [...competitors];
+
+    if (filterEvent !== 'all') {
+      data = data.filter((comp) => comp.event_type === filterEvent);
+    }
+
+    data.sort((a, b) => {
+      if (sortBy === 'priceChange') {
+        return Math.abs(b.price_change || 0) - Math.abs(a.price_change || 0);
+      }
+      if (sortBy === 'ratingChange') {
+        return Math.abs(b.rating_change || 0) - Math.abs(a.rating_change || 0);
+      }
+      return new Date(b.last_updated || 0) - new Date(a.last_updated || 0);
+    });
+
+    return data;
+  }, [competitors, filterEvent, sortBy]);
+
+  const tableModel = useMemo(() => {
+    const formatPrice = (value) => {
+      const numeric = Number(value || 0);
+      return numeric > 0 ? `₹${numeric.toFixed(0)}` : 'N/A';
+    };
+
+    if (sheetPricingRows.length > 0) {
+      return {
+        headers: ['Product Name', 'Our Company', 'Amazon', 'Flipkart', 'Ecart', 'Local Shops', 'Sales Ratio', 'Recommendations'],
+        rows: sheetPricingRows.map((row) => {
+          const market = Number(row.marketPrice || 0);
+          const amazon = market;
+          const flipkart = market > 0 ? market * 1.01 : 0;
+          const ecart = market > 0 ? market * 0.99 : 0;
+          const localShops = market > 0 ? market * 1.02 : 0;
+          return [
+            row.product || 'Product',
+            formatPrice(row.currentPrice),
+            formatPrice(amazon),
+            formatPrice(flipkart),
+            formatPrice(ecart),
+            formatPrice(localShops),
+            `${Number(row.expectedMarginPct || 0).toFixed(1)}% margin`,
+            row.action || `Recommended: ₹${Number(row.recommendedPrice || 0).toFixed(0)}`
+          ];
+        })
+      };
+    }
+
+    if (products.length > 0 && selectedProductData) {
+      const yourPrice = Number(selectedProductData.current_price || 0);
+
+      const findByPlatform = (platformName) => {
+        const match = filteredCompetitors.find((item) =>
+          (item.platform || '').toLowerCase().includes(platformName.toLowerCase())
+        );
+        return match ? Number(match.current_price || 0) : 0;
+      };
+
+      const amazon = Number(aiEstimate?.amazon || 0) || findByPlatform('amazon');
+      const flipkart = Number(aiEstimate?.flipkart || 0) || findByPlatform('flipkart');
+      const ecart = Number(aiEstimate?.ecart || 0) || findByPlatform('ecart') || findByPlatform('ekart');
+      const localShops = Number(aiEstimate?.localShops || 0);
+
+      const recommendation = aiEstimate?.recommendation || 'Collect more competitor prices for stronger recommendation';
+      const salesRatio = aiEstimate?.salesRatio || 'N/A';
+
+      return {
+        headers: ['Product Name', 'Our Company', 'Amazon', 'Flipkart', 'Ecart', 'Local Shops', 'Sales Ratio', 'Recommendations'],
+        rows: [
+          [
+            selectedProductData.title || 'Selected Product',
+            formatPrice(aiEstimate?.ourPrice || yourPrice),
+            formatPrice(amazon),
+            formatPrice(flipkart),
+            formatPrice(ecart),
+            formatPrice(localShops),
+            salesRatio,
+            recommendation
+          ]
+        ]
+      };
+    }
+
+    return null;
+  }, [products.length, selectedProductData, filteredCompetitors, sheetPricingRows, aiEstimate]);
 
   useEffect(() => {
     fetchProducts();
@@ -25,47 +117,96 @@ const CompetitorRadar = () => {
 
   const fetchProducts = async () => {
     try {
-      const res = await api.getProducts();
+      setLoading(true);
+      const [res, sheetAnalysisRes] = await Promise.all([
+        api.getProducts(),
+        api.getSheetAnalysis().catch(() => ({ analyses: [] }))
+      ]);
       setProducts(res.data || []);
+
+      const latestPricingAnalysis = (sheetAnalysisRes.analyses || []).find((analysis) => {
+        if (analysis.analysis_type !== 'pricing_analysis') return false;
+        if (!analysis.insights) return false;
+        let insights = analysis.insights;
+        if (typeof insights === 'string') {
+          try {
+            insights = JSON.parse(insights);
+          } catch {
+            insights = null;
+          }
+        }
+        return Array.isArray(insights?.productComparisons) && insights.productComparisons.length > 0;
+      });
+
+      if (latestPricingAnalysis?.insights) {
+        let parsed = latestPricingAnalysis.insights;
+        if (typeof parsed === 'string') {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch {
+            parsed = null;
+          }
+        }
+        setSheetPricingRows(parsed?.productComparisons || []);
+      } else {
+        setSheetPricingRows([]);
+      }
+      setAiEstimate(null);
+
       if (res.data?.length > 0) {
         setSelectedProduct(res.data[0].id);
+      } else {
+        setLoading(false);
       }
     } catch (error) {
       console.error('Error fetching products:', error);
-    }
-  };
-
-  const fetchCompetitorData = async () => {
-    try {
-      setLoading(true);
-      const res = await api.getCompetitors(selectedProduct);
-      setCompetitors(res.data || []);
-
-      const alertsRes = await api.getAlerts();
-      setAlerts(alertsRes.data || []);
-    } catch (error) {
-      console.error('Error fetching competitor data:', error);
-      setCompetitors([]);
-      setAlerts([]);
-    } finally {
+      setProducts([]);
+      setSheetPricingRows([]);
       setLoading(false);
     }
   };
 
-  const getEventColor = (type) => {
-    switch (type) {
-      case 'price': return '#6366f1';
-      case 'bundle': return '#f59e0b';
-      case 'rating': return '#10b981';
-      default: return '#64748b';
+  const fetchCompetitorData = async () => {
+    const withTimeout = (promise, timeoutMs = 8000) => {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Request timeout')), timeoutMs);
+        })
+      ]);
+    };
+
+    try {
+      setLoading(true);
+      const [res] = await Promise.all([
+        withTimeout(api.getCompetitors(selectedProduct), 8000)
+      ]);
+      setCompetitors(res?.data || []);
+
+      const selected = products.find((item) => item.id === selectedProduct);
+      if (selected?.title) {
+        const estimateRes = await withTimeout(
+          api.estimateCompetitorPrices(selected.title, Number(selected.current_price || 0)),
+          12000
+        ).catch(() => null);
+        setAiEstimate(estimateRes?.data || null);
+      } else {
+        setAiEstimate(null);
+      }
+    } catch (error) {
+      console.error('Error fetching competitor data:', error);
+      setCompetitors([]);
+      setAiEstimate(null);
+    } finally {
+      setLoading(false);
     }
   };
 
   if (loading) {
     return (
       <div className="competitor-radar">
-        <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-          <Loader className="animate-spin" size={40} style={{ margin: '0 auto 20px' }} />
+        <div className="state-card">
+          <Loader className="animate-spin" size={40} />
           <p>Loading competitor data...</p>
         </div>
       </div>
@@ -79,11 +220,7 @@ const CompetitorRadar = () => {
         <p>Track competitor activities and market changes</p>
       </div>
 
-      {products.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-          <p>No products tracked yet. Add products to track competitors.</p>
-        </div>
-      ) : (
+      {products.length > 0 && (
         <>
           <div className="controls">
             <div className="control-group">
@@ -113,76 +250,38 @@ const CompetitorRadar = () => {
             </div>
           </div>
 
-          {competitors.length > 0 && (
-            <div className="competitor-table-card">
-              <div className="competitor-table">
-                <div className="table-header">
-                  <div>Competitor</div>
-                  <div>Current Price</div>
-                  <div>Price Change</div>
-                  <div>Rating</div>
-                  <div>Rating Change</div>
-                  <div>Event</div>
-                  <div>Last Updated</div>
-                </div>
-                {competitors.map((comp) => (
-                  <div key={comp.id} className="table-row">
-                    <div className="competitor-name">
-                      <div className="competitor-avatar">
-                        <Package size={16} />
-                      </div>
-                      {comp.name}
-                    </div>
-                    <div className="price-cell">₹{comp.current_price || 'N/A'}</div>
-                    <div className="change-cell">
-                      <span className={`change-badge ${comp.price_change < 0 ? 'negative' : comp.price_change > 0 ? 'positive' : 'neutral'}`}>
-                        {comp.price_change < 0 ? <TrendingDown size={14} /> : comp.price_change > 0 ? <TrendingUp size={14} /> : null}
-                        {comp.price_change !== 0 ? `${comp.price_change > 0 ? '+' : ''}${comp.price_change}%` : 'No change'}
-                      </span>
-                    </div>
-                    <div className="rating-cell">
-                      ⭐ {comp.rating || 'N/A'}
-                    </div>
-                    <div className="change-cell">
-                      <span className={`change-badge ${comp.rating_change > 0 ? 'positive' : comp.rating_change < 0 ? 'negative' : 'neutral'}`}>
-                        {comp.rating_change > 0 ? <TrendingUp size={14} /> : comp.rating_change < 0 ? <TrendingDown size={14} /> : null}
-                        {comp.rating_change !== 0 ? `${comp.rating_change > 0 ? '+' : ''}${comp.rating_change}` : 'No change'}
-                      </span>
-                    </div>
-                    <div className="event-cell">
-                      <span className="event-badge" style={{ background: `${getEventColor(comp.event_type)}15`, color: getEventColor(comp.event_type) }}>
-                        <AlertCircle size={12} />
-                        {comp.event_type}
-                      </span>
-                    </div>
-                    <div className="time-cell">{comp.last_updated || 'N/A'}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {alerts.length > 0 && (
-            <div className="alerts-section">
-              <h2 className="section-title">Recent Competitor Intelligence</h2>
-              <div className="alerts-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '20px' }}>
-                {alerts.slice(0, 3).map((alert) => (
-                  <InsightCard
-                    key={`comp-alert-${alert.id}`}
-                    insight={{
-                      title: alert.title,
-                      type: 'competitor_activity',
-                      urgency_score: alert.severity === 'high' ? 95 : alert.severity === 'warning' ? 80 : 60,
-                      confidence: 90,
-                      explanation: alert.message,
-                      action: 'Review Market Strategy'
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
         </>
+      )}
+
+      {!tableModel && (
+        <div className="state-card compact">
+          <p>No sheet-based competitor analysis yet. Run analysis in Settings, then refresh this page.</p>
+        </div>
+      )}
+
+      {tableModel && (
+        <div className="competitor-table-card">
+          <div className="competitor-table simple-table">
+            <table>
+              <thead>
+                <tr>
+                  {tableModel.headers.map((header) => (
+                    <th key={header}>{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tableModel.rows.map((row, rowIndex) => (
+                  <tr key={`cmp-row-${rowIndex}`}>
+                    {row.map((value, colIndex) => (
+                      <td key={`cmp-cell-${rowIndex}-${colIndex}`}>{value}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );

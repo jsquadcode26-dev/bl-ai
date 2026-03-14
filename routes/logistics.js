@@ -1,48 +1,523 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { verifyToken } from '../utils/auth.js';
 import { getLogisticsData } from '../utils/db.js';
 
 const router = express.Router();
 
+const fallbackCityCoordinates = {
+  delhi: { lat: 28.6139, lon: 77.2090, display_name: 'Delhi, India' },
+  mumbai: { lat: 19.0760, lon: 72.8777, display_name: 'Mumbai, India' },
+  bengaluru: { lat: 12.9716, lon: 77.5946, display_name: 'Bengaluru, India' },
+  bangalore: { lat: 12.9716, lon: 77.5946, display_name: 'Bengaluru, India' },
+  chennai: { lat: 13.0827, lon: 80.2707, display_name: 'Chennai, India' },
+  hyderabad: { lat: 17.3850, lon: 78.4867, display_name: 'Hyderabad, India' },
+  kolkata: { lat: 22.5726, lon: 88.3639, display_name: 'Kolkata, India' },
+  pune: { lat: 18.5204, lon: 73.8567, display_name: 'Pune, India' },
+  jaipur: { lat: 26.9124, lon: 75.7873, display_name: 'Jaipur, India' }
+};
+
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 12000) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const toRadians = (deg) => (deg * Math.PI) / 180;
+
+const haversineKm = (lat1, lon1, lat2, lon2) => {
+  const R = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const geocodePlace = async (place) => {
+  const fallback = fallbackCityCoordinates[place.toLowerCase().trim()];
+
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(place)}`;
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        'User-Agent': 'MarketMindAI/1.0 (logistics optimizer)',
+        'Accept-Language': 'en'
+      }
+    }, 12000);
+
+    if (response.ok) {
+      const data = await response.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return {
+          lat: Number(data[0].lat),
+          lon: Number(data[0].lon),
+          displayName: data[0].display_name
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('Primary geocode failed:', error.message);
+  }
+
+  if (fallback) {
+    return {
+      lat: fallback.lat,
+      lon: fallback.lon,
+      displayName: fallback.display_name
+    };
+  }
+
+  throw new Error(`Could not locate place: ${place}. Try a major city name.`);
+};
+
+const fetchRouteOptions = async (fromCoord, toCoord) => {
+  const endpoints = [
+    'https://router.project-osrm.org',
+    'https://routing.openstreetmap.de/routed-car'
+  ];
+
+  for (const base of endpoints) {
+    try {
+      const url = `${base}/route/v1/driving/${fromCoord.lon},${fromCoord.lat};${toCoord.lon},${toCoord.lat}?overview=full&geometries=geojson&alternatives=true&steps=true`;
+      const response = await fetchWithTimeout(url, {}, 15000);
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      if (Array.isArray(data.routes) && data.routes.length > 0) {
+        return data.routes;
+      }
+    } catch (error) {
+      console.warn('Route provider failed:', base, error.message);
+    }
+  }
+
+  throw new Error('Failed to fetch real route from routing providers. Please try again.');
+};
+
+const fetchTollBoothsInBbox = async (bbox) => {
+  const query = `[out:json][timeout:25];node["barrier"="toll_booth"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});out;`;
+  try {
+    const response = await fetchWithTimeout('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `data=${encodeURIComponent(query)}`
+    }, 9000);
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+    return (data.elements || []).map((item) => ({ lat: item.lat, lon: item.lon }));
+  } catch (error) {
+    console.warn('Toll booth lookup failed:', error.message);
+    return [];
+  }
+};
+
+const computeRouteBbox = (coordinates) => {
+  const lons = coordinates.map((coord) => coord[0]);
+  const lats = coordinates.map((coord) => coord[1]);
+  const margin = 0.25;
+  return {
+    south: Math.min(...lats) - margin,
+    north: Math.max(...lats) + margin,
+    west: Math.min(...lons) - margin,
+    east: Math.max(...lons) + margin
+  };
+};
+
+const countTollBoothsNearRoute = (routeCoordinates, tollBooths) => {
+  if (!routeCoordinates?.length || !tollBooths?.length) return 0;
+
+  const dedupeThresholdKm = 0.25;
+  const dedupedBooths = [];
+
+  tollBooths.forEach((booth) => {
+    const alreadyGrouped = dedupedBooths.some((existing) =>
+      haversineKm(existing.lat, existing.lon, booth.lat, booth.lon) <= dedupeThresholdKm
+    );
+    if (!alreadyGrouped) {
+      dedupedBooths.push(booth);
+    }
+  });
+
+  const thresholdKm = 0.35;
+  let count = 0;
+  dedupedBooths.forEach((booth) => {
+    const near = routeCoordinates.some((coord) => {
+      const [lon, lat] = coord;
+      return haversineKm(lat, lon, booth.lat, booth.lon) <= thresholdKm;
+    });
+    if (near) count += 1;
+  });
+
+  return count;
+};
+
+const buildRouteCost = (route, options = {}) => {
+  const {
+    avoidTollGates = false,
+    targetDurationHours = 0,
+    maxAcceptableDuration = null,
+    maxAcceptableDistance = null
+  } = options;
+
+  let cost = route.estimatedDurationHours * 120 + route.distanceKm;
+
+  cost += avoidTollGates ? route.tollGates * 35 : route.tollGates * 5;
+
+  if (targetDurationHours > 0 && route.estimatedDurationHours > targetDurationHours) {
+    cost += (route.estimatedDurationHours - targetDurationHours) * 250;
+  }
+
+  if (maxAcceptableDuration && route.estimatedDurationHours > maxAcceptableDuration) {
+    cost += (route.estimatedDurationHours - maxAcceptableDuration) * 400;
+  }
+
+  if (maxAcceptableDistance && route.distanceKm > maxAcceptableDistance) {
+    cost += (route.distanceKm - maxAcceptableDistance) * 8;
+  }
+
+  return Number(cost.toFixed(3));
+};
+
+const selectRouteWithDijkstra = (routeOptions, options = {}) => {
+  if (!Array.isArray(routeOptions) || routeOptions.length === 0) return null;
+
+  const startNode = 'START';
+  const endNode = 'END';
+  const routeNodeIds = routeOptions.map((_, index) => `R${index}`);
+
+  const adjacency = new Map();
+  adjacency.set(startNode, []);
+  adjacency.set(endNode, []);
+  routeNodeIds.forEach((nodeId) => adjacency.set(nodeId, []));
+
+  routeOptions.forEach((route, index) => {
+    const nodeId = routeNodeIds[index];
+    const weight = buildRouteCost(route, options);
+    adjacency.get(startNode).push({ to: nodeId, weight });
+    adjacency.get(nodeId).push({ to: endNode, weight: 0 });
+  });
+
+  const distances = new Map();
+  const previous = new Map();
+  const unvisited = new Set(adjacency.keys());
+
+  adjacency.forEach((_, key) => distances.set(key, Infinity));
+  distances.set(startNode, 0);
+
+  while (unvisited.size > 0) {
+    let current = null;
+    let smallest = Infinity;
+
+    unvisited.forEach((node) => {
+      const candidate = distances.get(node);
+      if (candidate < smallest) {
+        smallest = candidate;
+        current = node;
+      }
+    });
+
+    if (current === null || smallest === Infinity) break;
+    if (current === endNode) break;
+
+    unvisited.delete(current);
+
+    const neighbors = adjacency.get(current) || [];
+    neighbors.forEach(({ to, weight }) => {
+      if (!unvisited.has(to)) return;
+      const alt = distances.get(current) + weight;
+      if (alt < distances.get(to)) {
+        distances.set(to, alt);
+        previous.set(to, current);
+      }
+    });
+  }
+
+  let cursor = endNode;
+  let selectedRouteNode = null;
+  while (previous.has(cursor)) {
+    const prevNode = previous.get(cursor);
+    if (prevNode.startsWith('R')) {
+      selectedRouteNode = prevNode;
+      break;
+    }
+    cursor = prevNode;
+  }
+
+  if (!selectedRouteNode) return routeOptions[0];
+  const selectedIndex = Number(selectedRouteNode.replace('R', ''));
+  return routeOptions[selectedIndex] || routeOptions[0];
+};
+
+// Transport optimization: From place -> To place -> optimized route details
+router.post('/transport/optimize', verifyToken, async (req, res) => {
+  try {
+    const { fromPlace, toPlace, targetDurationHours, avoidTollGates = false } = req.body;
+
+    if (!fromPlace || !toPlace) {
+      return res.status(400).json({ success: false, error: 'fromPlace and toPlace are required' });
+    }
+
+    const fromCoord = await geocodePlace(fromPlace);
+    const toCoord = await geocodePlace(toPlace);
+    let osrmRoutes = [];
+
+    try {
+      osrmRoutes = await fetchRouteOptions(fromCoord, toCoord);
+    } catch (routeError) {
+      const directDistance = haversineKm(fromCoord.lat, fromCoord.lon, toCoord.lat, toCoord.lon);
+      const roadDistance = Number((directDistance * 1.2).toFixed(1));
+      const durationHours = Number((roadDistance / 52).toFixed(2));
+
+      osrmRoutes = [{
+        distance: roadDistance * 1000,
+        duration: durationHours * 3600,
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [fromCoord.lon, fromCoord.lat],
+            [toCoord.lon, toCoord.lat]
+          ]
+        },
+        fallback: true
+      }];
+      console.warn('Routing provider unavailable, using fallback route:', routeError.message);
+    }
+
+    const bbox = computeRouteBbox(osrmRoutes[0].geometry?.coordinates || []);
+    const tollBooths = await fetchTollBoothsInBbox(bbox);
+
+    const routeOptions = osrmRoutes.map((route, index) => {
+      const tollGates = countTollBoothsNearRoute(route.geometry?.coordinates || [], tollBooths);
+      const durationHours = route.duration / 3600;
+      const distanceKm = route.distance / 1000;
+
+      return {
+        routeName: index === 0 ? 'Primary Route' : `Alternative Route ${index}`,
+        distanceKm: Number(distanceKm.toFixed(1)),
+        estimatedDurationHours: Number(durationHours.toFixed(2)),
+        averageSpeedKmph: Number((distanceKm / durationHours).toFixed(1)),
+        tollGates,
+        notes: index === 0 ? 'Recommended by routing engine' : 'Alternate based on traffic/path',
+        geometry: route.geometry
+      };
+    });
+
+    const fastestRoute = [...routeOptions].sort((a, b) => a.estimatedDurationHours - b.estimatedDurationHours)[0];
+    const standardRoute = fastestRoute;
+
+    const target = Number(targetDurationHours || 0);
+    let optimizedRoute = fastestRoute;
+    if (target > 0) {
+      const withinTarget = routeOptions
+        .filter((option) => option.estimatedDurationHours <= target);
+      if (withinTarget.length > 0) {
+        optimizedRoute = selectRouteWithDijkstra(withinTarget, {
+          avoidTollGates,
+          targetDurationHours: target
+        });
+      } else {
+        optimizedRoute = selectRouteWithDijkstra(routeOptions, {
+          avoidTollGates,
+          targetDurationHours: target
+        });
+      }
+    } else if (avoidTollGates) {
+      const maxAcceptableDuration = fastestRoute.estimatedDurationHours * 1.2;
+      const maxAcceptableDistance = fastestRoute.distanceKm * 1.25;
+
+      const practicalCandidates = routeOptions.filter((option) =>
+        option.estimatedDurationHours <= maxAcceptableDuration &&
+        option.distanceKm <= maxAcceptableDistance
+      );
+
+      const candidatePool = practicalCandidates.length > 0 ? practicalCandidates : routeOptions;
+      optimizedRoute = selectRouteWithDijkstra(candidatePool, {
+        avoidTollGates: true,
+        maxAcceptableDuration,
+        maxAcceptableDistance
+      });
+
+      if (optimizedRoute.estimatedDurationHours > maxAcceptableDuration * 1.1) {
+        optimizedRoute = fastestRoute;
+      }
+    }
+
+    const comparison = {
+      etaDifferenceHours: Number((optimizedRoute.estimatedDurationHours - standardRoute.estimatedDurationHours).toFixed(2)),
+      distanceDifferenceKm: Number((optimizedRoute.distanceKm - standardRoute.distanceKm).toFixed(1)),
+      tollGateDifference: Number(optimizedRoute.tollGates - standardRoute.tollGates)
+    };
+
+    const detailedSolution = [
+      `Start point resolved: ${fromCoord.displayName}.`,
+      `Destination resolved: ${toCoord.displayName}.`,
+      `Standard route: ${standardRoute.routeName} | ${standardRoute.distanceKm} km | ${standardRoute.estimatedDurationHours} hrs | toll gates ${standardRoute.tollGates}.`,
+      `Optimized route: ${optimizedRoute.routeName} | ${optimizedRoute.distanceKm} km | ${optimizedRoute.estimatedDurationHours} hrs | toll gates ${optimizedRoute.tollGates}.`,
+      avoidTollGates
+        ? 'Route preference applied: minimum toll route selected without taking unrealistic detours.'
+        : 'Route preference applied: fastest practical route.'
+    ];
+
+    res.json({
+      success: true,
+      data: {
+        fromPlace,
+        toPlace,
+        avoidTollGates: Boolean(avoidTollGates),
+        targetDurationHours: target > 0 ? target : null,
+        standardRoute,
+        optimizedRoute,
+        comparison,
+        alternatives: routeOptions.map((option) => ({
+          routeName: option.routeName,
+          distanceKm: option.distanceKm,
+          estimatedDurationHours: option.estimatedDurationHours,
+          tollGates: option.tollGates,
+          notes: option.notes
+        })),
+        map: {
+          from: { lat: fromCoord.lat, lon: fromCoord.lon },
+          to: { lat: toCoord.lat, lon: toCoord.lon },
+          standardRouteGeometry: standardRoute.geometry,
+          optimizedRouteGeometry: optimizedRoute.geometry,
+          routeGeometry: optimizedRoute.geometry
+        },
+        detailedSolution
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Get logistics data
 router.get('/', verifyToken, async (req, res) => {
   try {
     const logs = await getLogisticsData(req.user.userId);
+    const normalizedLogs = (logs || []).filter((log) => Number(log.cost || 0) > 0);
 
-    // We want to return structure expected by LogisticsIntelligence.jsx:
-    // { providers: [], cost_trends: [], recommendations: [] }
+    const zoneFromLog = (log) => {
+      const route = (log.route || '').toLowerCase();
+      if (route.includes('zone 1') || route.includes('zone1')) return 'zone1';
+      if (route.includes('zone 2') || route.includes('zone2')) return 'zone2';
+      if (route.includes('zone 3') || route.includes('zone3')) return 'zone3';
+      const weight = Number(log.weight || 0);
+      if (weight <= 0.5) return 'zone1';
+      if (weight <= 2) return 'zone2';
+      return 'zone3';
+    };
 
-    // Generate robust mock/fallbacks if little data is present to make it workable:
-    const providers = [
-      { id: 1, name: 'Delhivery', zone1_cost: 45, zone2_cost: 65, zone3_cost: 90, rating: 4.2, avg_delivery_time: '2-3 Days' },
-      { id: 2, name: 'BlueDart', zone1_cost: 60, zone2_cost: 85, zone3_cost: 120, rating: 4.8, avg_delivery_time: '1-2 Days' },
-      { id: 3, name: 'Ecom Express', zone1_cost: 40, zone2_cost: 55, zone3_cost: 85, rating: 3.9, avg_delivery_time: '3-5 Days' }
-    ];
+    const providerMap = new Map();
+    const trendMap = new Map();
 
-    const cost_trends = [
-      { week: 'Week 1', Delhivery: 4800, BlueDart: 6200, 'Ecom Express': 3900 },
-      { week: 'Week 2', Delhivery: 5100, BlueDart: 6000, 'Ecom Express': 4100 },
-      { week: 'Week 3', Delhivery: 4900, BlueDart: 6500, 'Ecom Express': 3800 },
-      { week: 'Week 4', Delhivery: 4600, BlueDart: 6800, 'Ecom Express': 3500 }
-    ];
-
-    const recommendations = [
-      {
-        id: 1,
-        title: 'Switch Zone 3 shipments to Delhivery',
-        description: 'You are currently using BlueDart for Zone 3. Switching to Delhivery could reduce costs while maintaining acceptable delivery times.',
-        impact: 'high',
-        potential_savings: '₹12,500/mo'
-      },
-      {
-        id: 2,
-        title: 'Consolidate Weekend Shipments',
-        description: 'Batching Friday-Sunday orders into Monday morning pickups with Ecom Express qualifies for their bulk discount tier.',
-        impact: 'medium',
-        potential_savings: '₹4,200/mo'
+    normalizedLogs.forEach((log) => {
+      const providerName = log.provider || 'Unknown';
+      const providerKey = providerName.toLowerCase();
+      if (!providerMap.has(providerKey)) {
+        providerMap.set(providerKey, {
+          id: providerKey,
+          name: providerName,
+          zone1: [],
+          zone2: [],
+          zone3: [],
+          delays: 0,
+          count: 0,
+          deliveryDays: []
+        });
       }
-    ];
+
+      const provider = providerMap.get(providerKey);
+      provider.count += 1;
+      const cost = Number(log.cost || 0);
+      const zone = zoneFromLog(log);
+      provider[zone].push(cost);
+
+      const status = (log.status || '').toLowerCase();
+      if (status.includes('delay') || status.includes('late')) provider.delays += 1;
+
+      if (log.estimated_delivery && log.created_at) {
+        const created = new Date(log.created_at);
+        const estimated = new Date(log.estimated_delivery);
+        const days = (estimated - created) / (1000 * 60 * 60 * 24);
+        if (Number.isFinite(days) && days >= 0) {
+          provider.deliveryDays.push(days);
+        }
+      }
+
+      const date = new Date(log.created_at);
+      const weekLabel = `${date.getFullYear()}-W${Math.ceil((date.getDate() + 6 - date.getDay()) / 7)}`;
+      if (!trendMap.has(weekLabel)) {
+        trendMap.set(weekLabel, { week: weekLabel });
+      }
+      const weekEntry = trendMap.get(weekLabel);
+      weekEntry[providerName] = (weekEntry[providerName] || 0) + cost;
+    });
+
+    const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+
+    const providers = Array.from(providerMap.values()).map((provider) => {
+      const averageDelivery = avg(provider.deliveryDays);
+      const delayRatio = provider.count > 0 ? provider.delays / provider.count : 0;
+      const rating = Math.max(2.5, Math.min(5, 5 - (delayRatio * 2)));
+
+      return {
+        id: provider.id,
+        name: provider.name,
+        zone1_cost: Number(avg(provider.zone1).toFixed(2)),
+        zone2_cost: Number(avg(provider.zone2).toFixed(2)),
+        zone3_cost: Number(avg(provider.zone3).toFixed(2)),
+        rating: Number(rating.toFixed(1)),
+        avg_delivery_time: averageDelivery > 0 ? `${averageDelivery.toFixed(1)} Days` : 'N/A',
+        avg_total_cost: Number(avg([...provider.zone1, ...provider.zone2, ...provider.zone3]).toFixed(2))
+      };
+    });
+
+    const cost_trends = Array.from(trendMap.values())
+      .sort((a, b) => a.week.localeCompare(b.week))
+      .slice(-8);
+
+    const recommendations = [];
+    if (providers.length >= 2) {
+      const sortedByCost = [...providers].sort((a, b) => a.avg_total_cost - b.avg_total_cost);
+      const cheapest = sortedByCost[0];
+      const expensive = sortedByCost[sortedByCost.length - 1];
+
+      if (expensive.avg_total_cost > cheapest.avg_total_cost) {
+        const diff = expensive.avg_total_cost - cheapest.avg_total_cost;
+        recommendations.push({
+          id: 'cost-switch',
+          title: `Shift shipments from ${expensive.name} to ${cheapest.name}`,
+          description: `${expensive.name} average cost is ₹${expensive.avg_total_cost.toFixed(0)} vs ₹${cheapest.avg_total_cost.toFixed(0)} for ${cheapest.name}.`,
+          impact: diff > 20 ? 'high' : 'medium',
+          potential_savings: `₹${(diff * 30).toFixed(0)}/month`,
+          confidence: 88
+        });
+      }
+    }
+
+    const delayedProviders = providers.filter((provider) => provider.rating < 3.8);
+    if (delayedProviders.length > 0) {
+      recommendations.push({
+        id: 'delivery-risk',
+        title: 'Reduce delayed shipment risk',
+        description: `Low delivery reliability detected for: ${delayedProviders.map((p) => p.name).join(', ')}. Consider rerouting high-priority orders.`,
+        impact: 'medium',
+        potential_savings: 'On-time delivery improvement',
+        confidence: 82
+      });
+    }
 
     res.json({
       success: true,
@@ -64,7 +539,7 @@ router.get('/comparison', verifyToken, async (req, res) => {
     const dateFrom = new Date();
     dateFrom.setDate(dateFrom.getDate() - parseInt(days));
 
-    let query = supabase
+    let query = supabaseAdmin
       .from('logistics_logs')
       .select('*')
       .eq('seller_id', req.user.userId)
@@ -130,7 +605,7 @@ router.post('/shipment/log', verifyToken, async (req, res) => {
       });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('logistics_logs')
       .insert([{
         seller_id: req.user.userId,
@@ -167,7 +642,7 @@ router.get('/:route/analytics', verifyToken, async (req, res) => {
     const dateFrom = new Date();
     dateFrom.setDate(dateFrom.getDate() - parseInt(days));
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('logistics_logs')
       .select('*')
       .eq('seller_id', req.user.userId)

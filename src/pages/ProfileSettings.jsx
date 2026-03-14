@@ -30,8 +30,8 @@ const ProfileSettings = () => {
   const fetchSheetStatus = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/sheets/status');
-      setSheets(response.data);
+      const response = await api.getSheetStatus();
+      setSheets(response);
     } catch (error) {
       console.error('Error fetching sheet status:', error);
       setSheets({ connected: false });
@@ -89,7 +89,7 @@ const ProfileSettings = () => {
     }
 
     try {
-      await api.delete('/sheets/disconnect');
+      await api.disconnectGoogleSheet();
       setMessage('Google Sheet disconnected');
       setMessageType('success');
       fetchSheetStatus();
@@ -104,8 +104,8 @@ const ProfileSettings = () => {
       setMessage('Running analysis...');
       setMessageType('info');
 
-      const response = await api.post('/sheets/analyze');
-      setMessage(`Analysis complete: ${response.data.analyses.length} insights generated`);
+      const response = await api.triggerSheetAnalysis();
+      setMessage(`Analysis complete: ${response.analyses?.length || 0} insights generated`);
       setMessageType('success');
     } catch (error) {
       setMessage('Failed to run analysis');
