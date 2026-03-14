@@ -12,16 +12,24 @@ const RouteMapUpdater = ({ from, to, routeCoordinates }) => {
   const map = useMap();
 
   useEffect(() => {
-    if (!from || !to) return;
+    if (!from || !to || !map) return;
 
-    const points = [
-      [from.lat, from.lon],
-      [to.lat, to.lon],
-      ...(routeCoordinates || []).map(([lon, lat]) => [lat, lon])
-    ];
+    try {
+      const points = [
+        [from.lat, from.lon],
+        [to.lat, to.lon],
+        ...(routeCoordinates || []).map(([lon, lat]) => [lat, lon])
+      ];
 
-    if (points.length > 1) {
-      map.fitBounds(points, { padding: [30, 30] });
+      if (points.length >= 2) {
+        map.fitBounds(points, { padding: [30, 30] });
+      }
+    } catch (err) {
+      console.warn('Map fit bounds error:', err);
+      // Fallback: just center on from location
+      if (map && from) {
+        map.setView([from.lat, from.lon], 7);
+      }
     }
   }, [map, from, to, routeCoordinates]);
 
@@ -97,23 +105,38 @@ const LogisticsIntelligence = () => {
 
   const handleOptimizeRoute = async () => {
     if (!transportForm.fromPlace.trim() || !transportForm.toPlace.trim()) {
+      setTransportError('Please enter both starting and destination places');
       return;
     }
 
     try {
       setOptimizingRoute(true);
       setTransportError('');
+      console.log('🚚 Requesting route optimization:', {
+        from: transportForm.fromPlace,
+        to: transportForm.toPlace,
+        targetDuration: transportForm.targetDurationHours,
+        avoidTolls: transportForm.avoidTollGates
+      });
+
       const response = await api.optimizeTransportRoute(
         transportForm.fromPlace.trim(),
         transportForm.toPlace.trim(),
         transportForm.targetDurationHours ? Number(transportForm.targetDurationHours) : undefined,
         transportForm.avoidTollGates
       );
-      setOptimizedRouteData(response.data || null);
+
+      if (!response.data) {
+        throw new Error('No route data returned');
+      }
+
+      console.log('✓ Route optimization successful:', response.data);
+      setOptimizedRouteData(response.data);
     } catch (error) {
       console.error('Error optimizing route:', error);
+      const errorMsg = error?.error || error?.message || error?.data?.error || 'Unable to optimize route. Please check your location names and try again.';
+      setTransportError(errorMsg);
       setOptimizedRouteData(null);
-      setTransportError(error?.error || error?.message || 'Unable to optimize route right now. Please try again.');
     } finally {
       setOptimizingRoute(false);
     }

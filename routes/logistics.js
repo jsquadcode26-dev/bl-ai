@@ -28,6 +28,22 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = 12000) => {
   }
 };
 
+const fetchWithRetry = async (url, options = {}, timeoutMs = 12000, maxRetries = 2) => {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const delay = attempt > 0 ? Math.min(1000 * Math.pow(2, attempt - 1), 5000) : 0;
+      if (delay > 0) await new Promise(r => setTimeout(r, delay));
+      
+      const response = await fetchWithTimeout(url, options, timeoutMs);
+      if (response.ok) return response;
+      if (response.status !== 429 && response.status !== 503) return response; // Don't retry non-rate-limit errors
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      console.warn(`Attempt ${attempt + 1} failed, retrying...`, error.message);
+    }
+  }
+};
+
 const toRadians = (deg) => (deg * Math.PI) / 180;
 
 const haversineKm = (lat1, lon1, lat2, lon2) => {
@@ -104,21 +120,28 @@ const fetchRouteOptions = async (fromCoord, toCoord) => {
 
 const fetchTollBoothsInBbox = async (bbox) => {
   const query = `[out:json][timeout:25];node["barrier"="toll_booth"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});out;`;
+  
   try {
-    const response = await fetchWithTimeout('https://overpass-api.de/api/interpreter', {
+    const response = await fetchWithRetry('https://overpass-api.de/api/interpreter', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `data=${encodeURIComponent(query)}`
-    }, 9000);
+    }, 10000, 1); // 1 retry for toll booths
 
     if (!response.ok) {
+      console.warn(`Overpass API returned ${response.status}, using fallback toll count`);
       return [];
     }
 
     const data = await response.json();
-    return (data.elements || []).map((item) => ({ lat: item.lat, lon: item.lon }));
+    if (data.elements && Array.isArray(data.elements)) {
+      const booths = data.elements.map((item) => ({ lat: item.lat, lon: item.lon }));
+      console.log(`✓ Fetched ${booths.length} toll booths from Overpass API`);
+      return booths;
+    }
+    return [];
   } catch (error) {
-    console.warn('Toll booth lookup failed:', error.message);
+    console.warn(`Toll booth lookup failed (${error.message}) - will use fallback toll counting`);
     return [];
   }
 };
@@ -190,74 +213,25 @@ const buildRouteCost = (route, options = {}) => {
   return Number(cost.toFixed(3));
 };
 
-const selectRouteWithDijkstra = (routeOptions, options = {}) => {
-  if (!Array.isArray(routeOptions) || routeOptions.length === 0) return null;
-
-  const startNode = 'START';
-  const endNode = 'END';
-  const routeNodeIds = routeOptions.map((_, index) => `R${index}`);
-
-  const adjacency = new Map();
-  adjacency.set(startNode, []);
-  adjacency.set(endNode, []);
-  routeNodeIds.forEach((nodeId) => adjacency.set(nodeId, []));
-
-  routeOptions.forEach((route, index) => {
-    const nodeId = routeNodeIds[index];
-    const weight = buildRouteCost(route, options);
-    adjacency.get(startNode).push({ to: nodeId, weight });
-    adjacency.get(nodeId).push({ to: endNode, weight: 0 });
-  });
-
-  const distances = new Map();
-  const previous = new Map();
-  const unvisited = new Set(adjacency.keys());
-
-  adjacency.forEach((_, key) => distances.set(key, Infinity));
-  distances.set(startNode, 0);
-
-  while (unvisited.size > 0) {
-    let current = null;
-    let smallest = Infinity;
-
-    unvisited.forEach((node) => {
-      const candidate = distances.get(node);
-      if (candidate < smallest) {
-        smallest = candidate;
-        current = node;
-      }
-    });
-
-    if (current === null || smallest === Infinity) break;
-    if (current === endNode) break;
-
-    unvisited.delete(current);
-
-    const neighbors = adjacency.get(current) || [];
-    neighbors.forEach(({ to, weight }) => {
-      if (!unvisited.has(to)) return;
-      const alt = distances.get(current) + weight;
-      if (alt < distances.get(to)) {
-        distances.set(to, alt);
-        previous.set(to, current);
-      }
-    });
+const selectBestRoute = (routeOptions, options = {}) => {
+  // Simply select the route with minimum cost score
+  // This is clearer than Dijkstra for this simple problem
+  if (!Array.isArray(routeOptions) || routeOptions.length === 0) {
+    return null;
   }
 
-  let cursor = endNode;
-  let selectedRouteNode = null;
-  while (previous.has(cursor)) {
-    const prevNode = previous.get(cursor);
-    if (prevNode.startsWith('R')) {
-      selectedRouteNode = prevNode;
-      break;
+  let bestRoute = routeOptions[0];
+  let bestCost = buildRouteCost(bestRoute, options);
+
+  for (let i = 1; i < routeOptions.length; i++) {
+    const currentCost = buildRouteCost(routeOptions[i], options);
+    if (currentCost < bestCost) {
+      bestCost = currentCost;
+      bestRoute = routeOptions[i];
     }
-    cursor = prevNode;
   }
 
-  if (!selectedRouteNode) return routeOptions[0];
-  const selectedIndex = Number(selectedRouteNode.replace('R', ''));
-  return routeOptions[selectedIndex] || routeOptions[0];
+  return bestRoute;
 };
 
 // Transport optimization: From place -> To place -> optimized route details
@@ -269,13 +243,25 @@ router.post('/transport/optimize', verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, error: 'fromPlace and toPlace are required' });
     }
 
-    const fromCoord = await geocodePlace(fromPlace);
-    const toCoord = await geocodePlace(toPlace);
-    let osrmRoutes = [];
+    console.log(`\n🚚 Optimizing route: ${fromPlace} → ${toPlace}`);
+    console.log(`   Target duration: ${targetDurationHours || 'any'} hours, Avoid tolls: ${avoidTollGates}`);
 
+    let fromCoord, toCoord;
+    try {
+      fromCoord = await geocodePlace(fromPlace);
+      toCoord = await geocodePlace(toPlace);
+      console.log(`   From: ${fromCoord.displayName} [${fromCoord.lat.toFixed(3)}, ${fromCoord.lon.toFixed(3)}]`);
+      console.log(`   To: ${toCoord.displayName} [${toCoord.lat.toFixed(3)}, ${toCoord.lon.toFixed(3)}]`);
+    } catch (geocodeError) {
+      return res.status(400).json({ success: false, error: geocodeError.message });
+    }
+
+    let osrmRoutes = [];
     try {
       osrmRoutes = await fetchRouteOptions(fromCoord, toCoord);
+      console.log(`   ✓ Got ${osrmRoutes.length} route(s) from OSRM`);
     } catch (routeError) {
+      console.warn(`   ⚠ Route provider failed: ${routeError.message}, using fallback`);
       const directDistance = haversineKm(fromCoord.lat, fromCoord.lon, toCoord.lat, toCoord.lon);
       const roadDistance = Number((directDistance * 1.2).toFixed(1));
       const durationHours = Number((roadDistance / 52).toFixed(2));
@@ -292,11 +278,19 @@ router.post('/transport/optimize', verifyToken, async (req, res) => {
         },
         fallback: true
       }];
-      console.warn('Routing provider unavailable, using fallback route:', routeError.message);
+      console.log(`   ✓ Using fallback route: ${roadDistance} km, ${durationHours} hrs`);
+    }
+
+    if (!osrmRoutes || osrmRoutes.length === 0) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Unable to generate routes. Please try again.' 
+      });
     }
 
     const bbox = computeRouteBbox(osrmRoutes[0].geometry?.coordinates || []);
     const tollBooths = await fetchTollBoothsInBbox(bbox);
+    console.log(`   ✓ Checked toll booths (found ${tollBooths.length} potential booths)`);
 
     const routeOptions = osrmRoutes.map((route, index) => {
       const tollGates = countTollBoothsNearRoute(route.geometry?.coordinates || [], tollBooths);
@@ -314,6 +308,13 @@ router.post('/transport/optimize', verifyToken, async (req, res) => {
       };
     });
 
+    if (routeOptions.length === 0) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'No valid routes found.' 
+      });
+    }
+
     const fastestRoute = [...routeOptions].sort((a, b) => a.estimatedDurationHours - b.estimatedDurationHours)[0];
     const standardRoute = fastestRoute;
 
@@ -323,12 +324,12 @@ router.post('/transport/optimize', verifyToken, async (req, res) => {
       const withinTarget = routeOptions
         .filter((option) => option.estimatedDurationHours <= target);
       if (withinTarget.length > 0) {
-        optimizedRoute = selectRouteWithDijkstra(withinTarget, {
+        optimizedRoute = selectBestRoute(withinTarget, {
           avoidTollGates,
           targetDurationHours: target
         });
       } else {
-        optimizedRoute = selectRouteWithDijkstra(routeOptions, {
+        optimizedRoute = selectBestRoute(routeOptions, {
           avoidTollGates,
           targetDurationHours: target
         });
@@ -343,7 +344,7 @@ router.post('/transport/optimize', verifyToken, async (req, res) => {
       );
 
       const candidatePool = practicalCandidates.length > 0 ? practicalCandidates : routeOptions;
-      optimizedRoute = selectRouteWithDijkstra(candidatePool, {
+      optimizedRoute = selectBestRoute(candidatePool, {
         avoidTollGates: true,
         maxAcceptableDuration,
         maxAcceptableDistance
@@ -353,6 +354,9 @@ router.post('/transport/optimize', verifyToken, async (req, res) => {
         optimizedRoute = fastestRoute;
       }
     }
+
+    console.log(`   ✓ Standard route: ${standardRoute.routeName} (${standardRoute.distanceKm} km, ${standardRoute.estimatedDurationHours} hrs, ${standardRoute.tollGates} tolls)`);
+    console.log(`   ✓ Optimized route: ${optimizedRoute.routeName} (${optimizedRoute.distanceKm} km, ${optimizedRoute.estimatedDurationHours} hrs, ${optimizedRoute.tollGates} tolls)`);
 
     const comparison = {
       etaDifferenceHours: Number((optimizedRoute.estimatedDurationHours - standardRoute.estimatedDurationHours).toFixed(2)),
@@ -398,7 +402,11 @@ router.post('/transport/optimize', verifyToken, async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error(`❌ Route optimization failed: ${error.message}`, error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Unable to optimize route. Please check your location names and try again.'
+    });
   }
 });
 
