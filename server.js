@@ -21,6 +21,7 @@ import logisticsRoutes from './routes/logistics.js';
 import notificationRoutes from './routes/notifications.js';
 import sheetRoutes from './routes/sheets.js';
 import adminRoutes from './routes/admin.js';
+import chatbotRoutes from './routes/chatbot.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -76,6 +77,7 @@ app.use('/api/logistics', logisticsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/sheets', sheetRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/chatbot', chatbotRoutes);
 
 // WS Connection handling
 io.on('connection', (socket) => {

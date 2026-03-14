@@ -165,6 +165,10 @@ class APIClient {
     return this.client.post('/reviews', reviewData);
   }
 
+  analyzeReviewUrl(url) {
+    return this.client.post('/reviews/url-analyze', { url });
+  }
+
   // Logistics endpoints
   getLogisticsData() {
     return this.client.get('/logistics');
@@ -241,6 +245,15 @@ class APIClient {
 
   disconnectGoogleSheet() {
     return this.client.delete('/sheets/disconnect');
+  }
+
+  // Chatbot endpoints
+  sendChatMessage(message, conversationHistory = [], pageContext = {}) {
+    return this.client.post('/chatbot/message', {
+      message,
+      conversationHistory,
+      pageContext
+    });
   }
 }
 

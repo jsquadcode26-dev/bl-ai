@@ -11,6 +11,7 @@ import InsightsFeed from './pages/InsightsFeed';
 import Notifications from './pages/Notifications';
 import ProfileSettings from './pages/ProfileSettings';
 import Layout from './components/Layout';
+import ChatAssistant from './components/ChatAssistant';
 import api from './utils/api';
 import realtime from './utils/realtime';
 import './App.css';
@@ -70,18 +71,21 @@ function App() {
           path="/*"
           element={
             isAuthenticated ? (
-              <Layout user={user} onLogout={handleLogout}>
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/price-tracker" element={<PriceTracker />} />
-                  <Route path="/reviews" element={<ReviewIntelligence />} />
-                  <Route path="/competitors" element={<CompetitorRadar />} />
-                  <Route path="/logistics" element={<LogisticsIntelligence />} />
-                  <Route path="/insights" element={<InsightsFeed />} />
-                  <Route path="/notifications" element={<Notifications />} />
-                  <Route path="/settings" element={<ProfileSettings />} />
-                </Routes>
-              </Layout>
+              <>
+                <Layout user={user} onLogout={handleLogout}>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/price-tracker" element={<PriceTracker />} />
+                    <Route path="/reviews" element={<ReviewIntelligence />} />
+                    <Route path="/competitors" element={<CompetitorRadar />} />
+                    <Route path="/logistics" element={<LogisticsIntelligence />} />
+                    <Route path="/insights" element={<InsightsFeed />} />
+                    <Route path="/notifications" element={<Notifications />} />
+                    <Route path="/settings" element={<ProfileSettings />} />
+                  </Routes>
+                </Layout>
+                <ChatAssistant />
+              </>
             ) : (
               <Navigate to="/login" replace />
             )
